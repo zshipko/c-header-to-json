@@ -77,7 +77,6 @@ class Generator:
         name = node.spelling
 
         if node.kind == CursorKind.TYPEDEF_DECL:
-            print(node.referenced.spelling)
             try:
                 node = list(node.get_children())[0]
             except:
@@ -119,8 +118,6 @@ parser.add_argument('files', metavar='F', type=str, nargs='+', help="C header fi
 parser.add_argument('--function', type=str, action='append', help="Function regular expression selector")
 parser.add_argument('--type', type=str, action='append', help="Type regular expression selector")
 args = parser.parse_args()
-
-print(args)
 
 if len(args.files) > 1:
     gen = Generator(args.files[0], args.function or [], args.type or [])
