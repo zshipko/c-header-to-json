@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+
+import sys
+from clang.cindex import *
+import json
+import re
+import subprocess
+
+
+def find_path():
+    return subprocess.check_output(['llvm-config', '--libdir']).decode().strip()
+
+Config.set_library_path(find_path())
+
+def _regex_matches_in(s, r):
+    '''Check if s matches any regular expressions in r'''
+    if r is None:
+        return False
+    if len(r) == 0:
+        return True
+
+    for h in r:
+        if len(re.findall(h, s)) > 0:
+            return True
+    return False
+
+class Generator:
+    def __init__(self, filename, allowed_functions, allowed_types):
+        self.allowed_functions = allowed_functions
+        self.allowed_types = allowed_types
+        self.index = Index.create()
+        self.tu = self.index.parse(filename)
+        self.data = {
+            'functions': {},
+            'structs': {},
+            'enums': {},
+        }
+
+    def load(self, filename):
+        self.tu = self.index.parse(filename)
+
+    def _walk_enum(self, name, node):
+        if not _regex_matches_in(name, self.allowed_types):
+            return
+
+        fields = {}
+
+        for c in node.get_children():
+            fields[c.spelling] = c.enum_value
+
+        self.data['enums'][name] = {
+            'fields': fields,
+        }
+        if node.brief_comment is not None:
+            self.data['enums'][name]['comment'] = node.brief_comment
+
+
+    def _walk_struct(self, name, node):
+        if not _regex_matches_in(name, self.allowed_types):
+            return
+
+        fields = {}
+
+        for c in node.get_children():
+            fields[c.spelling] = c.type.spelling
+
+        self.data['structs'][name] = {
+            'fields': fields,
+        }
+        if node.brief_comment is not None:
+            self.data['structs'][name]['comment'] = node.brief_comment
+
+    def walk(self, node=None):
+        if node is None:
+            node = self.tu.cursor
+
+        name = node.spelling
+
+        if node.kind == CursorKind.TYPEDEF_DECL:
+            print(node.referenced.spelling)
+            try:
+                node = list(node.get_children())[0]
+            except:
+                return
+
+        if node.kind == CursorKind.STRUCT_DECL:
+            self._walk_struct(name, node)
+            return
+        elif node.kind == CursorKind.ENUM_DECL:
+            self._walk_enum(name, node)
+            return
+        elif node.kind == CursorKind.TRANSLATION_UNIT:
+            pass
+        elif node.kind == CursorKind.FUNCTION_DECL:
+            if not _regex_matches_in(name, self.allowed_functions):
+                return
+
+            self.data['functions'][name] = {
+                "argument_types": [x.spelling for x in node.type.argument_types()],
+                "result": node.type.get_result().spelling,
+            }
+            if node.brief_comment is not None:
+                self.data['functions'][name]['comment'] = node.brief_comment
+
+        for c in node.get_children():
+            self.walk(c)
+
+    def run(self):
+        self.walk()
+        return json.dumps(self.data, indent=2)
+
+    def dump(self):
+        print(self.run())
+
+import argparse
+
+parser = argparse.ArgumentParser(description='Generate JSON from C headers')
+parser.add_argument('files', metavar='F', type=str, nargs='+', help="C header files")
+parser.add_argument('--function', type=str, action='append', help="Function regular expression selector")
+parser.add_argument('--type', type=str, action='append', help="Type regular expression selector")
+args = parser.parse_args()
+
+print(args)
+
+if len(args.files) > 1:
+    gen = Generator(args.files[0], args.function or [], args.type or [])
+    gen.walk()
+    for i in range(1, len(args.files)):
+        gen.load(args.files[i])
+        gen.walk()
+    gen.dump()
+else:
+    Generator(args.files[0], args.function or [], args.type or []).dump()
